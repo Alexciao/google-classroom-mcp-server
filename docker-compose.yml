@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  google-classroom-mcp:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./tokens.json:/app/tokens.json
+      - ./credentials.json:/app/credentials.json
+    environment:
+      - PORT=3000
+    restart: unless-stopped
