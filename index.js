@@ -15,6 +15,13 @@ const TOKEN_PATH = path.join(
   "tokens.json"
 );
 
+const WORKSPACE_ROOT = "/workspace/user";
+
+function isSafePath(filePath) {
+  const resolvedPath = path.resolve(WORKSPACE_ROOT, filePath);
+  return resolvedPath.startsWith(WORKSPACE_ROOT);
+}
+
 const server = new McpServer({
   name: "class",
   version: "1.0.0"
@@ -41,7 +48,9 @@ async function authenticateAndSaveCredentials() {
       'https://www.googleapis.com/auth/classroom.courses.readonly',
       'https://www.googleapis.com/auth/classroom.announcements.readonly',
       'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
-      'https://www.googleapis.com/auth/classroom.rosters.readonly'
+      'https://www.googleapis.com/auth/classroom.rosters.readonly',
+      'https://www.googleapis.com/auth/classroom.coursework.me',
+      'https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly'
     ],
   });
   
@@ -128,12 +137,61 @@ server.tool("assignments",
   }
 );
 
+server.tool("list_homework_materials",
+  { courseId: z.string().describe("The ID of the course") },
+  async ({ courseId }) => {
+    try {
+      const classroom = await setupClassroomClient();
+      const materials = await classroom.courses.courseWorkMaterials.list({ courseId });
+      return { content: [{ type: "text", text: JSON.stringify(materials.data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    }
+  }
+);
+
+server.tool("read_workspace_file",
+  { filePath: z.string().describe("The relative path to the file in /workspace/user/") },
+  async ({ filePath }) => {
+    if (!isSafePath(filePath)) {
+      return { content: [{ type: "text", text: "Error: Access denied. Path must be within /workspace/user/" }] };
+    }
+    try {
+      const content = await fs.readFile(path.resolve(WORKSPACE_ROOT, filePath), 'utf8');
+      return { content: [{ type: "text", text: content }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    }
+  }
+);
+
+server.tool("write_workspace_file",
+  { 
+    filePath: z.string().describe("The relative path where the file should be saved"),
+    content: z.string().describe("The text content to write")
+  },
+  async ({ filePath, content }) => {
+    if (!isSafePath(filePath)) {
+      return { content: [{ type: "text", text: "Error: Access denied. Path must be within /workspace/user/" }] };
+    }
+    try {
+      const fullPath = path.resolve(WORKSPACE_ROOT, filePath);
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await fs.writeFile(fullPath, content, 'utf8');
+      return { content: [{ type: "text", text: `Successfully wrote to ${filePath}` }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    }
+  }
+);
+
 async function main() {
   if (process.argv[2] === "auth") {
     await authenticateAndSaveCredentials();
     process.exit(0);
   } else {
     const app = express();
+    app.use(express.json());
     let transport;
 
     app.get("/sse", async (req, res) => {
@@ -149,9 +207,14 @@ async function main() {
       }
     });
 
+    app.post("/webhook", async (req, res) => {
+      console.log("Received Poke Inbound Message:", req.body);
+      res.status(200).send("Webhook received");
+    });
+
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => {
-      console.error(`SSE Server listening on port ${PORT}`);
+      console.error(`SSE & Webhook Server listening on port ${PORT}`);
     });
   }
 }
